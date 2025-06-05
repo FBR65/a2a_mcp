@@ -1,0 +1,39 @@
+[project]
+name = "mcp-server"
+version = "0.1.0"
+description = "MCP Server Base"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "mcp[cli]>=1.0.0",
+    "python-dotenv>=1.0.1",
+    "fastapi>=0.115.12",
+    "uvicorn>=0.34.0",
+    "fastapi-mcp>=0.2.0",
+    "requests>=2.32.3",
+    "tika>=3.1.0",
+    "trafilatura>=2.0.0",
+    "selenium>=4.31.0",
+    "webdriver-manager>=4.0.2",
+    "fastembed>=0.6.0",
+    "nltk>=3.9.1",
+    "numpy>=2.2.4",
+    "openai>=1.70.0",
+    "pydantic-ai>=0.0.52",
+    "qdrant-client>=1.13.3",
+    "scikit-learn>=1.6.1",
+    "sentence-transformers>=4.0.1",
+    "spacy>=3.8.5",
+    "tika>=3.1.0",
+    "duckduckgo-search>=8.0.1",
+    "pydantic[email]>=2.11.3",
+    "ntplib>=0.4.0",
+    "python-pptx>=1.0.2",
+    "pillow>=11.2.1",
+    "pymongo>=4.12.1",
+    "sqlalchemy>=2.0.40",
+    "matplotlib>=3.10.3",
+    "pandas>=2.2.3",
+    "reportlab>=4.4.1",
+    "weasyprint>=65.1",
+]
