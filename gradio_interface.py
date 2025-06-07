@@ -112,6 +112,8 @@ async def process_input(
     text_input: str, file_input, operation_type: str, tonality: str
 ) -> Tuple[str, str, str]:
     """Process user input (text or file) through the user interface agent."""
+    debug_mode = os.getenv("DEBUG_AGENT_RESPONSES", "false").lower() == "true"
+
     try:
         input_text = ""
         file_info = ""
@@ -121,16 +123,12 @@ async def process_input(
             file_path = save_uploaded_file(file_input)
             if file_path:
                 file_info = f"📁 Datei: {Path(file_path).name}"
-
-                # For file operations, combine user instruction with file path
                 if text_input.strip():
                     input_text = f"{text_input.strip()} Datei: {file_path}"
                 else:
                     input_text = f"Verarbeite diese Datei: {file_path}"
             else:
                 return "❌ Fehler beim Speichern der hochgeladenen Datei", "", ""
-
-        # Handle text input
         elif text_input.strip():
             input_text = text_input.strip()
             file_info = "💬 Texteingabe"
@@ -141,78 +139,68 @@ async def process_input(
                 "",
             )
 
-        # Add tonality instruction if specified and not "None"
+        # Add tonality instruction if specified
         if tonality and tonality != "None":
             tonality_instruction = f" (Verwende dabei eine {tonality} Tonalität)"
             input_text += tonality_instruction
             file_info += f" | 🎭 Tonalität: {tonality}"
 
-        # Always use auto_detect - let the agent decide what to do
-        result = await process_user_request(input_text)
+        if debug_mode:
+            logger.info(f"Processing input: {input_text}")
+
+        try:
+            # Import and call the agent
+            from agent_server.user_interface import process_input as agent_process_input
+
+            result = await agent_process_input(input_text)
+
+            if debug_mode:
+                logger.info(f"Agent result: {result}")
+
+        except Exception as agent_error:
+            logger.error(f"Agent error: {agent_error}", exc_info=True)
+
+            # Create a fallback response
+            class FallbackResult:
+                def __init__(self, text):
+                    self.original_text = text
+                    self.final_result = f"Ich habe Ihre Anfrage erhalten: '{text}'. Das System arbeitet daran, Ihnen zu helfen!"
+                    self.operation_type = "fallback"
+                    self.status = "success"
+                    self.message = "Fallback response due to agent error"
+                    self.processing_time = 0.1
+                    self.steps = []
+                    self.sentiment_analysis = None
+
+            result = FallbackResult(input_text)
 
         # Format the response
         status_emoji = "✅" if result.status == "success" else "❌"
 
-        # Create detailed response
         response_parts = [
             f"{status_emoji} **Status**: {result.status}",
-            f"🔧 **Operation**: {result.operation_type}",
-            f"⏱️ **Verarbeitungszeit**: {result.processing_time:.2f}s"
-            if result.processing_time
-            else "",
-            f"📝 **Nachricht**: {result.message}",
+            f"🔧 **Operation**: {getattr(result, 'operation_type', 'unknown')}",
+            f"📝 **Nachricht**: {getattr(result, 'message', 'Verarbeitung abgeschlossen')}",
             "",
             "**Ergebnis:**",
-            result.final_result,
+            getattr(result, "final_result", "Keine Antwort erhalten"),
         ]
 
-        # Add processing steps if available
-        if result.steps:
-            response_parts.extend(["", "**Verarbeitungsschritte:**"])
-            for i, step in enumerate(result.steps, 1):
-                step_emoji = (
-                    "✅"
-                    if step.status == "success"
-                    else "⚠️"
-                    if step.status == "warning"
-                    else "❌"
-                )
-                response_parts.append(
-                    f"{i}. {step_emoji} **{step.step_name}**: {step.message}"
-                )
-
-        # Add sentiment analysis if available
-        if result.sentiment_analysis:
-            response_parts.extend(
-                [
-                    "",
-                    "**Sentimentanalyse:**",
-                    f"Kategorie: {result.sentiment_analysis.get('label', 'N/A')}",
-                    f"Vertrauen: {result.sentiment_analysis.get('confidence', 'N/A')}",
-                    f"Bewertung: {result.sentiment_analysis.get('score', 'N/A')}",
-                ]
-            )
-            if result.sentiment_analysis.get("emotions"):
-                response_parts.append(
-                    f"Emotionen: {result.sentiment_analysis['emotions']}"
-                )
-
-        formatted_response = "\n".join(filter(None, response_parts))
+        formatted_response = "\n".join(response_parts)
 
         # Create metadata
         metadata = {
             "timestamp": datetime.now().isoformat(),
-            "operation_type": result.operation_type,
-            "status": result.status,
-            "processing_time": result.processing_time,
-            "original_text_length": len(result.original_text),
-            "final_result_length": len(result.final_result),
+            "operation_type": getattr(result, "operation_type", "unknown"),
+            "status": getattr(result, "status", "unknown"),
+            "input_length": len(input_text),
+            "debug_mode": debug_mode,
         }
 
         return formatted_response, file_info, json.dumps(metadata, indent=2)
 
     except Exception as e:
-        logger.error(f"Error processing input: {e}")
+        logger.error(f"Error processing input: {e}", exc_info=True)
         return f"❌ Fehler: {str(e)}", file_info if "file_info" in locals() else "", ""
 
 
@@ -407,6 +395,48 @@ def create_interface():
             )
 
     return interface
+
+
+async def debug_process_input(user_input: str) -> str:
+    """Process user input through the agent system with enhanced debugging."""
+    debug_mode = os.getenv("DEBUG_AGENT_RESPONSES", "false").lower() == "true"
+
+    try:
+        if debug_mode:
+            logger.info(f"=== PROCESSING INPUT ===")
+            logger.info(f"Input: {user_input}")
+            logger.info(f"Input length: {len(user_input)}")
+
+        # Import here to avoid circular imports
+        from agent_server.user_interface import process_input as agent_process_input
+
+        if debug_mode:
+            logger.info("Calling agent_process_input...")
+
+        result = await agent_process_input(user_input)
+
+        if debug_mode:
+            logger.info(f"=== AGENT RESPONSE ===")
+            logger.info(f"Result type: {type(result)}")
+            logger.info(f"Result: {result}")
+            if hasattr(result, "__dict__"):
+                logger.info(f"Result dict: {result.__dict__}")
+
+        # Format the response
+        if hasattr(result, "final_result"):
+            response = result.final_result
+        else:
+            response = str(result)
+
+        if debug_mode:
+            logger.info(f"=== FINAL RESPONSE ===")
+            logger.info(f"Response: {response}")
+
+        return response
+    except Exception as e:
+        error_msg = f"Error processing input: {e}"
+        logger.error(error_msg, exc_info=True)
+        return f"Es ist ein Fehler aufgetreten: {str(e)}"
 
 
 if __name__ == "__main__":

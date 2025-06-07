@@ -4,7 +4,8 @@ from pydantic import BaseModel
 from pydantic_ai import Agent
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.mcp import MCPServerHTTP
-from openai import AsyncClient
+from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.providers.openai import OpenAIProvider
 from dotenv import load_dotenv
 
 load_dotenv(override=True, dotenv_path="../../.env")
@@ -21,19 +22,21 @@ class LektorResponse(BaseModel):
     message: str
 
 
-# Initialize the lektor agent with MCP integration
-def _get_mcp_server_url() -> str:
-    """Get MCP server URL from environment variables."""
-    host = os.getenv("SERVER_HOST", "localhost")
-    port = os.getenv("SERVER_PORT", "8000")
-    scheme = os.getenv("SERVER_SCHEME", "http")
-    return f"{scheme}://{host}:{port}"
+# Initialize the model with OpenAI provider for Ollama compatibility
+def _create_lektor_agent():
+    """Create the lektor agent with proper Ollama configuration."""
+    try:
+        llm_api_key = os.getenv("API_KEY", "ollama")
+        llm_endpoint = os.getenv("BASE_URL", "http://localhost:11434/v1")
+        llm_model_name = os.getenv("LEKTOR_MODEL", "qwen2.5:latest")
 
+        provider = OpenAIProvider(base_url=llm_endpoint, api_key=llm_api_key)
+        model = OpenAIModel(provider=provider, model_name=llm_model_name)
 
-lektor_agent = Agent(
-    model=os.getenv("TEXT_OPT_MODEL", "gpt-4"),
-    result_type=LektorResponse,
-    system_prompt="""Ihre Aufgabe ist es, den vom Benutzer übergebenen Text direkt zu korrigieren.
+        return Agent(
+            model=model,
+            result_type=LektorResponse,
+            system_prompt="""Ihre Aufgabe ist es, den vom Benutzer übergebenen Text direkt zu korrigieren.
 Konzentrieren Sie sich auf die Korrektur von Grammatik, Rechtschreibung, Zeichensetzung, Syntax und Lesefluss des Originaltextes.
 Das Ergebnis Ihrer Arbeit muss der korrigierte Originaltext sein.
 
@@ -44,7 +47,13 @@ Geben Sie NUR den vollständig korrigierten Text zurück.
 *   KEINE Kommentare über den Text oder Ihre Arbeit.
 *   KEINE Zitate des Originaltextes.
 *   Antworten Sie ausschließlich mit dem direkt korrigierten Text.""",
-)
+        )
+    except Exception as e:
+        logging.error(f"Failed to initialize lektor agent: {e}")
+        raise
+
+
+lektor_agent = _create_lektor_agent()
 
 
 async def run_lektor(request: LektorRequest) -> LektorResponse:
@@ -62,14 +71,6 @@ async def run_lektor(request: LektorRequest) -> LektorResponse:
             logging.warning(f"Could not get current time from MCP: {e}")
         finally:
             await mcp_server.close()
-
-        # Configure client if needed
-        if os.getenv("BASE_URL"):
-            client = AsyncClient(
-                api_key=os.getenv("API_KEY"), base_url=os.getenv("BASE_URL")
-            )
-            # Update agent's model client
-            lektor_agent._model.client = client
 
         result = await lektor_agent.run(request.text)
 
@@ -103,3 +104,12 @@ async def lektor_a2a_function(messages: list[ModelMessage]) -> LektorResponse:
 
     request = LektorRequest(text=text)
     return await run_lektor(request)
+
+
+# Initialize the lektor agent with MCP integration
+def _get_mcp_server_url() -> str:
+    """Get MCP server URL from environment variables."""
+    host = os.getenv("SERVER_HOST", "localhost")
+    port = os.getenv("SERVER_PORT", "8000")
+    scheme = os.getenv("SERVER_SCHEME", "http")
+    return f"{scheme}://{host}:{port}"

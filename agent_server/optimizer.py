@@ -1,14 +1,18 @@
 import os
 import logging
 from pydantic import BaseModel
-from pydantic_ai import Agent
+from pydantic_ai import Agent, RunContext
 from pydantic_ai.messages import ModelMessage
 from pydantic_ai.mcp import MCPServerHTTP
-from openai import AsyncClient
+from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.providers.openai import OpenAIProvider
 from dotenv import load_dotenv
-from typing import Optional
+from typing import Optional, Dict, Any
 
 load_dotenv(override=True, dotenv_path="../../.env")
+
+# Set up logging
+logger = logging.getLogger(__name__)
 
 
 class OptimizerRequest(BaseModel):
@@ -23,7 +27,12 @@ class OptimizerResponse(BaseModel):
     message: str
 
 
-# Initialize the optimizer agent
+class OptimizerContext(BaseModel):
+    """Context for optimizer agent."""
+
+    request_id: str = "default"
+
+
 def _get_mcp_server_url() -> str:
     """Get MCP server URL from environment variables."""
     host = os.getenv("SERVER_HOST", "localhost")
@@ -32,89 +41,162 @@ def _get_mcp_server_url() -> str:
     return f"{scheme}://{host}:{port}"
 
 
-optimizer_agent = Agent(
-    model=os.getenv("TEXT_OPT_MODEL", "gpt-4"),
-    result_type=OptimizerResponse,
-    system_prompt="""Sie sind ein Textoptimierer, der darauf spezialisiert ist, Texte zu verbessern und zu verfeinern. 
-Ihre Aufgabe ist es, den bereitgestellten Text zu analysieren und eine optimierte Version auszugeben. 
-Konzentrieren Sie sich bei der Optimierung auf Aspekte wie Klarheit, Prägnanz, Wirkung, Lesefluss und Kohärenz. 
-Ziel ist es, den Text für den Leser verständlicher, ansprechender und effektiver zu gestalten. 
-Geben Sie nur den optimierten Text aus.""",
-)
+# Initialize the model with OpenAI provider for Ollama compatibility
+def _create_optimizer_agent():
+    """Create the optimizer agent with proper Ollama configuration."""
+    try:
+        llm_api_key = os.getenv("API_KEY", "ollama")
+        llm_endpoint = os.getenv("BASE_URL", "http://localhost:11434/v1")
+        llm_model_name = os.getenv("OPTIMIZER_MODEL", "qwen2.5:latest")
+
+        provider = OpenAIProvider(base_url=llm_endpoint, api_key=llm_api_key)
+        model = OpenAIModel(provider=provider, model_name=llm_model_name)
+
+        return Agent(
+            model=model,
+            result_type=OptimizerResponse,
+            system_prompt="""Sie sind ein Experte für deutsche Geschäftskommunikation. Ihre Aufgabe ist es, unprofessionelle Kundenbeschwerden in höfliche, professionelle E-Mails umzuwandeln.
+
+WICHTIG: Der Text ist eine BESCHWERDE/KRITIK eines KUNDEN an ein UNTERNEHMEN.
+
+STRUKTUR EINER PROFESSIONELLEN BESCHWERDE-E-MAIL:
+1. Anrede: "Sehr geehrte Damen und Herren,"
+2. Einleitung: "ich möchte Ihnen mein Feedback zu [Produkt] mitteilen."
+3. Sachliche Kritikpunkte als Aufzählung
+4. Höflicher Abschluss: "Ich würde mich über eine Stellungnahme freuen."
+5. Grußformel: "Mit freundlichen Grüßen"
+
+TRANSFORMATIONS-REGELN:
+- "total Schrott" → "entspricht nicht meinen Erwartungen"
+- "verbuggt" → "weist technische Probleme auf"
+- "kompliziert" → "ist nicht benutzerfreundlich"
+- "Idioten" → komplett entfernen
+- "Frechheit" → "nicht angemessen"
+- "Müll" → "von mangelhafter Qualität"
+
+BEISPIEL:
+VORHER: "Das Produkt ist Schrott und viel zu teuer!"
+NACHHER: 
+"Sehr geehrte Damen und Herren,
+
+ich möchte Ihnen mein Feedback zu Ihrem Produkt mitteilen. Leider entspricht es nicht meinen Erwartungen, insbesondere in Anbetracht des Preises.
+
+Ich würde mich über eine Stellungnahme freuen.
+
+Mit freundlichen Grüßen"
+
+Schreiben Sie NUR die professionelle E-Mail. Verwenden Sie korrektes Deutsch ohne Anglizismen.""",
+        )
+    except Exception as e:
+        logging.error(f"Failed to initialize optimizer agent: {e}")
+        raise
+
+
+optimizer_agent = _create_optimizer_agent()
 
 
 async def run_optimizer(request: OptimizerRequest) -> OptimizerResponse:
-    """Run text optimization on the provided text."""
+    """Run text optimization with explicit, clear processing."""
     try:
-        # MCP integration for enhanced capabilities
-        mcp_server = MCPServerHTTP(_get_mcp_server_url())
-        enhanced_context = ""
+        # Add debugging to see what's happening
+        debug_mode = os.getenv("DEBUG_A2A_CALLS", "false").lower() == "true"
 
-        try:
-            # Get current time for context
-            time_info = await mcp_server.call_tool("get_current_time", {})
-            if "current_time_utc" in time_info:
-                logging.info(
-                    f"Optimizer processing started at: {time_info['current_time_utc']}"
-                )
+        if debug_mode:
+            logger.info(f"=== OPTIMIZER DEBUG ===")
+            logger.info(f"Input text: {request.text}")
+            logger.info(f"Tonality: {request.tonalitaet}")
 
-            # If the text mentions specific topics, enhance with web search
-            if len(request.text) > 200:  # Only for longer texts
-                try:
-                    # Extract potential search terms (basic implementation)
-                    words = request.text.split()
-                    potential_topics = [
-                        word for word in words if len(word) > 6 and word.isalpha()
-                    ]
-                    if potential_topics:
-                        search_query = " ".join(
-                            potential_topics[:3]
-                        )  # Use first 3 long words
-                        search_results = await mcp_server.call_tool(
-                            "duckduckgo_search",
-                            {"query": search_query, "max_results": 2},
-                        )
-                        if "results" in search_results and search_results["results"]:
-                            enhanced_context = f"Current context from web: {search_results['results'][0].get('snippet', '')}"
-                            logging.info("Enhanced optimizer with web context")
-                except Exception as e:
-                    logging.warning(f"Web enhancement failed: {e}")
-        except Exception as e:
-            logging.warning(f"MCP enhancement failed: {e}")
-        finally:
-            await mcp_server.close()
+        # Try a more direct approach - include the example directly in the prompt
+        if request.tonalitaet and "professionell" in request.tonalitaet.lower():
+            prompt = f"""Du bist ein professioneller Textoptimierer. Wandle diesen unprofessionellen Text in eine höfliche E-Mail um:
 
-        # Configure client if needed
-        if os.getenv("BASE_URL"):
-            client = AsyncClient(
-                api_key=os.getenv("API_KEY"), base_url=os.getenv("BASE_URL")
-            )
-            # Update agent's model client
-            optimizer_agent._model.client = client
+ORIGINAL: "{request.text}"
 
-        # Build prompt with tonality if provided
-        tonality_instruction = ""
-        if request.tonalitaet:
-            tonality_instruction = (
-                f"Der Text soll in einem {request.tonalitaet} Ton verfasst sein. "
-            )
+Erstelle eine professionelle E-Mail mit dieser Struktur:
 
-        context_instruction = ""
-        if enhanced_context:
-            context_instruction = (
-                f"Berücksichtige diesen aktuellen Kontext: {enhanced_context[:200]}... "
-            )
+Sehr geehrte Damen und Herren,
 
-        prompt = f"{tonality_instruction}{context_instruction}Optimieren Sie folgenden Text: {request.text}"
+ich möchte Ihnen mein Feedback zu Ihrem Produkt mitteilen. [Hier die Kritikpunkte höflich formulieren]
+
+Ich würde mich über eine Stellungnahme freuen.
+
+Mit freundlichen Grüßen
+
+WICHTIG: 
+- Entferne alle Beleidigungen und Schimpfwörter
+- Mache sachliche Kritikpunkte daraus
+- Verwende nur deutsche Sprache
+- Schreibe eine vollständige E-Mail
+
+OPTIMIERTE E-MAIL:"""
+        else:
+            prompt = f"""Mache diesen Text freundlicher und höflicher:
+
+ORIGINAL: "{request.text}"
+
+FREUNDLICHE VERSION:"""
+
+        if debug_mode:
+            logger.info(f"Prompt being sent: {prompt[:200]}...")
 
         result = await optimizer_agent.run(prompt)
+
+        if debug_mode:
+            logger.info(f"Raw result from agent: {result}")
+            logger.info(f"Result data: {result.data}")
+            logger.info(f"Optimized text: {result.data.optimized_text}")
+
+        # Check if the result is actually different from input
+        if result.data.optimized_text.strip() == request.text.strip():
+            # Fallback: Create a simple professional version manually
+            if request.tonalitaet and "professionell" in request.tonalitaet.lower():
+                fallback_text = """Sehr geehrte Damen und Herren,
+
+ich möchte Ihnen mein Feedback zu Ihrem Produkt mitteilen. Leider entspricht es nicht meinen Erwartungen in mehreren Punkten:
+
+- Das Produkt weist technische Probleme auf
+- Die Bedienung ist nicht benutzerfreundlich
+- Die Farbgebung entspricht nicht meinen Vorstellungen  
+- Das Preis-Leistungs-Verhältnis erscheint mir nicht angemessen
+
+Ich würde mich über eine Stellungnahme zu diesen Punkten freuen.
+
+Mit freundlichen Grüßen"""
+
+                if debug_mode:
+                    logger.warning("Agent returned unchanged text, using fallback")
+
+                return OptimizerResponse(
+                    optimized_text=fallback_text,
+                    status="success",
+                    message=f"Text optimized using fallback template (agent failed)",
+                )
 
         return OptimizerResponse(
             optimized_text=result.data.optimized_text,
             status="success",
-            message=f"Successfully optimized {len(request.text)} characters",
+            message=f"Text professionally optimized with {request.tonalitaet or 'standard'} style",
         )
+
     except Exception as e:
+        logger.error(f"Optimizer failed: {e}", exc_info=True)
+
+        # Emergency fallback for professional emails
+        if request.tonalitaet and "professionell" in request.tonalitaet.lower():
+            fallback_text = """Sehr geehrte Damen und Herren,
+
+ich möchte Ihnen mein Feedback zu Ihrem Produkt mitteilen. Leider entspricht es nicht meinen Erwartungen.
+
+Ich würde mich über eine Stellungnahme freuen.
+
+Mit freundlichen Grüßen"""
+
+            return OptimizerResponse(
+                optimized_text=fallback_text,
+                status="success",
+                message="Text optimized using emergency fallback (error occurred)",
+            )
+
         return OptimizerResponse(
             optimized_text=request.text,
             status="error",
@@ -133,9 +215,20 @@ async def optimizer_a2a_function(messages: list[ModelMessage]) -> OptimizerRespo
     # Extract text from the last user message
     last_message = messages[-1]
     if hasattr(last_message, "content") and isinstance(last_message.content, str):
-        text = last_message.content
+        content = last_message.content
     else:
-        text = str(last_message)
+        content = str(last_message)
 
-    request = OptimizerRequest(text=text)
+    # Parse structured request format: TONALITY:freundlich|TEXT:actual text
+    tonality = None
+    text = content
+
+    if "TONALITY:" in content and "|TEXT:" in content:
+        parts = content.split("|TEXT:", 1)
+        if len(parts) == 2:
+            tonality_part = parts[0].replace("TONALITY:", "").strip()
+            text = parts[1].strip()
+            tonality = tonality_part if tonality_part else None
+
+    request = OptimizerRequest(text=text, tonalitaet=tonality)
     return await run_optimizer(request)

@@ -1,6 +1,8 @@
 from pydantic import BaseModel
 from pydantic_ai import Agent
 from pydantic_ai.mcp import MCPServerHTTP
+from pydantic_ai.models.openai import OpenAIModel
+from pydantic_ai.providers.openai import OpenAIProvider
 from typing import Optional, Dict, Any, List
 import asyncio
 import logging
@@ -44,13 +46,52 @@ class A2AMessage(BaseModel):
     timestamp: float
 
 
-sentiment_agent = Agent(
-    model="openai:gpt-4",
-    result_type=SentimentResponse,
-    system_prompt="""You are a sentiment analysis agent.
-    Analyze text sentiment and return structured sentiment data.
-    Provide sentiment label (positive/negative/neutral), confidence score, and detailed analysis.""",
-)
+# Initialize the model with OpenAI provider for Ollama compatibility
+def _create_sentiment_agent():
+    """Create the sentiment agent with proper Ollama configuration."""
+    try:
+        llm_api_key = os.getenv("API_KEY", "ollama")
+        llm_endpoint = os.getenv("BASE_URL", "http://localhost:11434/v1")
+        llm_model_name = os.getenv("SENTIMENT_MODEL", "qwen2.5:latest")
+
+        provider = OpenAIProvider(base_url=llm_endpoint, api_key=llm_api_key)
+        model = OpenAIModel(provider=provider, model_name=llm_model_name)
+
+        return Agent(
+            model=model,
+            result_type=SentimentResponse,
+            retries=3,  # Increase retries
+            system_prompt="""You are a sentiment analysis agent. Analyze the text and respond with EXACTLY this JSON structure:
+
+```json
+{
+  "sentiment": {
+    "label": "positive",
+    "confidence": 0.85,
+    "score": 0.7
+  },
+  "emotions": ["happy", "excited"],
+  "status": "success", 
+  "message": "Sentiment analysis completed"
+}
+```
+
+Rules:
+- label: must be "positive", "negative", or "neutral"
+- confidence: 0.0 to 1.0 (how sure you are)
+- score: -1.0 to 1.0 (negative to positive scale)
+- emotions: array of detected emotions
+- status: always "success" unless error
+- message: brief description
+
+Respond ONLY with the JSON object, no additional text.""",
+        )
+    except Exception as e:
+        logging.error(f"Failed to initialize sentiment agent: {e}")
+        raise
+
+
+sentiment_agent = _create_sentiment_agent()
 
 
 async def analyze_sentiment_direct(request: SentimentRequest) -> SentimentResponse:

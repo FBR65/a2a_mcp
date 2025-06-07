@@ -34,12 +34,21 @@ class RefactorResult(BaseModel):
     query: str = Field(description="Query for the retrieve agent")
 
 
-class QueryRefactorAgent:
-    """
-    A class to encapsulate the query refactoring logic using a Pydantic AI Agent.
-    """
+# Initialize the model with OpenAI provider for Ollama compatibility
+def _create_query_refactor_agent():
+    """Create the query refactor agent with proper Ollama configuration."""
+    try:
+        llm_api_key = os.getenv("API_KEY", "ollama")
+        llm_endpoint = os.getenv("BASE_URL", "http://localhost:11434/v1")
+        llm_model_name = os.getenv("QUERY_REF_MODEL", "qwen2.5:latest")
 
-    DEFAULT_SYSTEM_PROMPT = """Du bist ein Assistent zur Optimierung von Nutzeranfragen für Large Language Models (LLMs).
+        provider = OpenAIProvider(base_url=llm_endpoint, api_key=llm_api_key)
+        model = OpenAIModel(provider=provider, model_name=llm_model_name)
+
+        return Agent(
+            model=model,
+            result_type=RefactorResult,
+            system_prompt="""Du bist ein Assistent zur Optimierung von Nutzeranfragen für Large Language Models (LLMs).
 Deine Aufgabe ist es, die folgende Nutzeranfrage so zu überarbeiten, dass sie maximal klar, präzise und effizient für ein LLM ist.
 
 **Anweisungen für die Überarbeitung:**
@@ -62,101 +71,61 @@ Gib KEINERLEI zusätzliche Informationen aus, wie z.B.:
 Wenn die Nutzeranfrage lautet: "Erzähl mir doch mal was über Katzen, vielleicht so ihre Geschichte und so?"
 Könnte deine Ausgabe (die überarbeitete Anfrage) sein: "Gib eine Zusammenfassung der Geschichte der Domestizierung von Katzen und ihrer Entwicklung."
 
-Nutzeranfrage: {{user_query}}
-Ausgabe (nur die überarbeitete Anfrage):"""
+Nutzeranfrage: {user_query}
+Ausgabe (nur die überarbeitete Anfrage):""",
+        )
+    except Exception as e:
+        logger.error(f"Failed to initialize query refactor agent: {e}")
+        raise
 
-    def __init__(
-        self,
-        api_key: Optional[str] = None,
-        base_url: Optional[str] = None,
-        model_name: Optional[str] = None,
-        system_prompt: str = DEFAULT_SYSTEM_PROMPT,
-    ):
+
+# Create the agent
+query_refactor_agent = _create_query_refactor_agent()
+
+
+async def refactor_query_direct(user_query: str) -> str:
+    """
+    Refactors the given user query using the configured agent.
+
+    Args:
+        user_query: The user query string to refactor.
+
+    Returns:
+        The refactored query string.
+    """
+    if not user_query:
+        logger.warning("Received empty user query.")
+        return ""
+
+    logger.info(f"Refactoring query: '{user_query}'")
+    try:
+        result = await query_refactor_agent.run(user_query)
+        refactored_query = result.data.query
+        logger.info(f"Refactored query: '{refactored_query}'")
+        return refactored_query
+    except Exception as e:
+        logger.error(f"Error during agent run for query '{user_query}': {e}")
+        return user_query  # Return original query if refactoring fails
+
+
+class QueryRefactorAgent:
+    """
+    A class to encapsulate the query refactoring logic using a Pydantic AI Agent.
+    """
+
+    def __init__(self):
         """
         Initializes the QueryRefactorAgent.
-
-        Args:
-            api_key: OpenAI API key. Defaults to os.getenv("API_KEY").
-            base_url: OpenAI base URL. Defaults to os.getenv("BASE_URL").
-            model_name: OpenAI model name. Defaults to os.getenv("MODEL_NAME").
-            system_prompt: The system prompt for the agent.
         """
-        self.api_key = api_key or os.getenv("API_KEY")
-        self.base_url = base_url or os.getenv("BASE_URL")
-        self.model_name = model_name or os.getenv("MODEL_NAME")
-        self.system_prompt = system_prompt
-
-        if not self.api_key:
-            raise ValueError("API_KEY environment variable or argument is required.")
-        if not self.base_url:
-            raise ValueError("BASE_URL environment variable or argument is required.")
-        if not self.model_name:
-            raise ValueError("MODEL_NAME environment variable or argument is required.")
-
         logger.info("Initializing QueryRefactorAgent...")
-        logger.info(f"Using Model: {self.model_name}, Base URL: {self.base_url}")
-
-        try:
-            provider = OpenAIProvider(base_url=self.base_url, api_key=self.api_key)
-            model = OpenAIModel(
-                provider=provider,
-                model_name=self.model_name,
-            )
-            self.agent = Agent(
-                name="Refactor Agent",
-                model=model,
-                deps_type=RefactorDependencies,
-                result_type=RefactorResult,
-                system_prompt=self.system_prompt,
-            )
-            logger.info("QueryRefactorAgent initialized successfully.")
-        except Exception as e:
-            logger.error(f"Failed to initialize Pydantic AI components: {e}")
-            raise
+        self.agent = query_refactor_agent
+        logger.info("QueryRefactorAgent initialized successfully.")
 
     async def refactor_query(self, user_query: str) -> str:
         """
         Refactors the given user query using the configured agent.
-
-        Args:
-            user_query: The user query string to refactor.
-
-        Returns:
-            The refactored query string.
-
-        Raises:
-            ValueError: If the agent fails to produce a valid result.
-            Exception: For other underlying errors during agent execution.
         """
-        if not user_query:
-            logger.warning("Received empty user query.")
-            return ""
-
-        logger.info(f"Refactoring query: '{user_query}'")
-        try:
-            run_result = await self.agent.run(user_query=user_query)
-            if isinstance(run_result.output, RefactorResult):
-                refactored_query = run_result.output.query
-                logger.info(f"Refactored query: '{refactored_query}'")
-                return refactored_query
-            else:
-                # This case might indicate an issue with pydantic-ai or the LLM response
-                logger.error(
-                    f"Agent returned unexpected output type: {type(run_result.output)}"
-                )
-                logger.error(f"Raw output: {run_result.raw_output}")
-                raise ValueError(
-                    "Agent did not return the expected RefactorResult structure."
-                )
-        except ValidationError as e:
-            logger.error(f"Validation error processing agent response: {e}")
-            logger.error(
-                f"Raw output that caused validation error: {getattr(e, 'raw_output', 'N/A')}"
-            )  # Attempt to log raw output if available
-            raise ValueError(f"Failed to validate agent response: {e}") from e
-        except Exception as e:
-            logger.error(f"Error during agent run for query '{user_query}': {e}")
-            raise  # Re-raise the original exception
+        return await refactor_query_direct(user_query)
 
 
 # A2A server function for query refactoring (moved outside the class)
@@ -173,12 +142,8 @@ async def query_ref_a2a_function(messages: list) -> RefactorResult:
         text = str(last_message)
 
     try:
-        # Initialize the agent with environment variables
-        refactor_agent_instance = QueryRefactorAgent()
-
-        # Refactor the query
-        refactored_query = await refactor_agent_instance.refactor_query(text)
-
+        # Use the direct function instead of creating a new instance
+        refactored_query = await refactor_query_direct(text)
         return RefactorResult(query=refactored_query)
 
     except Exception as e:
@@ -194,14 +159,11 @@ async def main():
     print(f"Pydantic AI version {pydantic_ai.__version__}")
 
     try:
-        # Initialize the agent (reads from .env by default)
-        refactor_agent_instance = QueryRefactorAgent()
-
         # Example query
         user_query = "Was soll gem der Bundesregierung im Datenschutz erreicht werden?"
 
         # Refactor the query
-        refactored_query = await refactor_agent_instance.refactor_query(user_query)
+        refactored_query = await refactor_query_direct(user_query)
 
         print("\n--- Refactoring Result ---")
         print(f"Original Query: {user_query}")
@@ -209,11 +171,9 @@ async def main():
 
         # Example with an empty query
         print("\n--- Testing Empty Query ---")
-        empty_result = await refactor_agent_instance.refactor_query("")
+        empty_result = await refactor_query_direct("")
         print(f"Result for empty query: '{empty_result}'")
 
-    except ValueError as e:
-        print(f"\nConfiguration Error: {e}")
     except Exception as e:
         print(f"\nAn unexpected error occurred: {e}")
 

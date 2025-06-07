@@ -1,6 +1,5 @@
 import asyncio
 import logging
-from pydantic_ai.messages import UserMessage
 
 # from a2a_protocol import a2a_registry  # Comment out until a2a_protocol is implemented
 from agent_server.lektor import lektor_a2a_function
@@ -57,27 +56,26 @@ async def run_text_processing_workflow(text: str, tonality: str = None):
 
     try:
         # Step 1: Refactor query for better processing
-        query_ref_message = [UserMessage(content=text)]
-        refactored_result = await registry.call_agent("query_ref", query_ref_message)
+        refactored_result = await registry.call_agent("query_ref", text)
         print(f"Refactored: {refactored_result.query}")
 
         # Step 2: Optimize text
-        optimize_message = [
-            UserMessage(
-                content=f"Optimize this text with tonality '{tonality}': {refactored_result.query}"
-            )
-        ]
-        optimized_result = await registry.call_agent("optimizer", optimize_message)
+        optimize_text = (
+            f"Optimize this text with tonality '{tonality}': {refactored_result.query}"
+        )
+        optimized_result = await registry.call_agent("optimizer", optimize_text)
         print(f"Optimized: {optimized_result.optimized_text}")
 
         # Step 3: Lektor correction
-        lektor_message = [UserMessage(content=optimized_result.optimized_text)]
-        corrected_result = await registry.call_agent("lektor", lektor_message)
+        corrected_result = await registry.call_agent(
+            "lektor", optimized_result.optimized_text
+        )
         print(f"Corrected: {corrected_result.corrected_text}")
 
         # Step 4: Sentiment analysis
-        sentiment_message = [UserMessage(content=corrected_result.corrected_text)]
-        sentiment_result = await registry.call_agent("sentiment", sentiment_message)
+        sentiment_result = await registry.call_agent(
+            "sentiment", corrected_result.corrected_text
+        )
         print(
             f"Sentiment: {sentiment_result.sentiment.label} (confidence: {sentiment_result.sentiment.confidence})"
         )
@@ -99,8 +97,7 @@ async def run_query_refactor_demo(query: str):
     registry = await setup_a2a_server()
 
     try:
-        query_ref_message = [UserMessage(content=query)]
-        result = await registry.call_agent("query_ref", query_ref_message)
+        result = await registry.call_agent("query_ref", query)
 
         print("\n--- Query Refactoring Demo ---")
         print(f"Original: {query}")

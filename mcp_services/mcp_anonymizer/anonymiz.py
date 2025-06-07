@@ -6,7 +6,38 @@ import requests  # For calling LLM API
 import json
 import re  # For finding LLM terms
 
-from .stream_doc import DocumentProcessor
+# Fix the relative import - use absolute import or handle import error
+try:
+    from .stream_doc import DocumentProcessor
+except ImportError:
+    # Fallback for when running as main module
+    try:
+        from stream_doc import DocumentProcessor
+    except ImportError:
+        # If neither works, define a simple fallback
+        class DocumentProcessor:
+            def __init__(self, input_dir):
+                self.input_dir = input_dir
+
+            def stream_all_documents(self):
+                """Simple fallback implementation."""
+                import os
+
+                for root, dirs, files in os.walk(self.input_dir):
+                    for file in files:
+                        if file.endswith((".txt", ".md", ".py")):
+                            file_path = os.path.join(root, file)
+                            try:
+                                with open(file_path, "r", encoding="utf-8") as f:
+                                    content = f.read()
+                                yield {
+                                    "content": content,
+                                    "metadata": {"file_name": file},
+                                }
+                            except Exception as e:
+                                print(f"Error reading {file_path}: {e}")
+                                continue
+
 
 # Load environment variables
 dotenv.load_dotenv()

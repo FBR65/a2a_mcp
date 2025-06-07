@@ -350,17 +350,32 @@ mcp.mount()  # This automatically discovers endpoints with operation_id
 # --- Run Server ---
 if __name__ == "__main__":
     logger.info(f"Starting Uvicorn server on host 0.0.0.0:{port_num}")
-    # Ensure the data directory exists before starting the server if using the default path
 
     # Check if reload should be enabled (e.g., based on an environment variable)
     reload_enabled = os.getenv("UVICORN_RELOAD", "true").lower() == "true"
     log_level = os.getenv("UVICORN_LOG_LEVEL", "info").lower()
+    workers_count = int(os.getenv("UVICORN_WORKERS", "1"))
 
-    uvicorn.run(
-        "main:app",
-        host="0.0.0.0",  # Listen on all available network interfaces
-        port=port_num,
-        reload=reload_enabled,  # Enable reload only in development
-        log_level=log_level,
-        # workers=... # Production setting - consider based on load, e.g., workers=4
-    )
+    # For reload or workers to work, we need to use import string format
+    if reload_enabled or workers_count > 1:
+        # Use import string format for reload/workers support
+        uvicorn.run(
+            "mcp_main:app",  # Import string format
+            host="0.0.0.0",
+            port=port_num,
+            reload=reload_enabled
+            if workers_count == 1
+            else False,  # Can't use both reload and workers
+            workers=workers_count
+            if not reload_enabled
+            else 1,  # Can't use both reload and workers
+            log_level=log_level,
+        )
+    else:
+        # Use app object directly for simple production deployment
+        uvicorn.run(
+            app,
+            host="0.0.0.0",
+            port=port_num,
+            log_level=log_level,
+        )
